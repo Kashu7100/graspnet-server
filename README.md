@@ -29,13 +29,14 @@ The pretrained weights can be downloaded from:
 
 `checkpoint-rs.tar` and `checkpoint-kn.tar` are trained using RealSense data and Kinect data respectively.
 
-The following scripts will run `checkpoint-rs.tar` (modify `command_serve.sh` if needed). 
+The following scripts will run graspnet with `checkpoint-rs.tar` (modify `command_serve.sh` if needed). 
 
 ```bash
+git clone https://github.com/Kashu7100/graspnet-server.git
 bash tools/run.sh
 ```
 
-You get the grasp pose by sending a point cloud:
+You can get the grasp pose(s) by sending a point cloud:
 ```python
 res = requests.post(
     f"http://0.0.0.0:8001/post",
