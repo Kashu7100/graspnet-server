@@ -116,10 +116,10 @@ def collision_detection(gg, cloud):
     gg = gg[~collision_mask]
     return gg
 
-def vis_grasps(gg, cloud):
+def vis_grasps(gg, cloud, top_n=50):
     gg.nms()
     gg.sort_by_score()
-    gg = gg[:50]
+    gg = gg[:top_n]
     grippers = gg.to_open3d_geometry_list()
     o3d.visualization.draw_geometries([cloud, *grippers])
 
@@ -147,6 +147,7 @@ class GraspInterface:
             points = payload.get("points", None)
             colors = payload.get("colors", None)
             visualize = payload.get("visualize", None)
+            top_n = payload.get("top_n", 50)
             if points is None or colors is None:
                 return JSONResponse({"status": "error"})
 
@@ -165,15 +166,18 @@ class GraspInterface:
                 if visualize:
                     cloud = o3d.geometry.PointCloud()
                     cloud.points = o3d.utility.Vector3dVector(points.astype(np.float32))
-                    cloud.colors = o3d.utility.Vector3dVector(colors.astype(np.float32))    
-                    vis_grasps(gg, cloud)
+                    cloud.colors = o3d.utility.Vector3dVector(colors.astype(np.float32))
+                    vis_grasps(gg, cloud, top_n)
 
+            gg.nms()
+            gg.sort_by_score()
+            gg = gg[:top_n]
             res = {
                 "translations": gg.translations,
                 "rotation_matrices": gg.rotation_matrices,
                 "scores": gg.scores,
             }
-            
+
             if double_encode:
                 return JSONResponse(json_numpy.dumps(res))
             else:
