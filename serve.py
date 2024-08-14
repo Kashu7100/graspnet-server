@@ -123,18 +123,11 @@ def vis_grasps(gg, cloud, top_n=50):
     grippers = gg.to_open3d_geometry_list()
     o3d.visualization.draw_geometries([cloud, *grippers])
 
-# def demo(data_dir):
-#     net = get_net()
-#     end_points, cloud = get_and_process_data(data_dir)
-#     gg = get_grasps(net, end_points)
-#     if cfgs.collision_thresh > 0:
-#         gg = collision_detection(gg, np.array(cloud.points))
-#     vis_grasps(gg, cloud)
-
 
 class GraspInterface:
-    def __init__(self):
+    def __init__(self, visualize_on_server: bool = False):
         self.net = get_net()
+        self.visualize_on_server = visualize_on_server
 
     @torch.no_grad()
     async def serve(self, payload: Dict[str, Any]) -> JSONResponse:
@@ -146,7 +139,7 @@ class GraspInterface:
 
             points = payload.get("points", None)
             colors = payload.get("colors", None)
-            visualize = payload.get("visualize", None)
+            visualize = payload.get("visualize", False)
             top_n = payload.get("top_n", 50)
             if points is None or colors is None:
                 return JSONResponse({"status": "error"})
@@ -162,12 +155,11 @@ class GraspInterface:
             if cfgs.collision_thresh > 0:
                 gg = collision_detection(gg, deepcopy(points))
 
-            if visualize is not None:
-                if visualize:
-                    cloud = o3d.geometry.PointCloud()
-                    cloud.points = o3d.utility.Vector3dVector(points.astype(np.float32))
-                    cloud.colors = o3d.utility.Vector3dVector(colors.astype(np.float32))
-                    vis_grasps(gg, cloud, top_n)
+            if self.visualize_on_server:
+                cloud = o3d.geometry.PointCloud()
+                cloud.points = o3d.utility.Vector3dVector(points.astype(np.float32))
+                cloud.colors = o3d.utility.Vector3dVector(colors.astype(np.float32))
+                vis_grasps(gg, cloud, top_n)
 
             gg.nms()
             gg.sort_by_score()
@@ -177,6 +169,17 @@ class GraspInterface:
                 "rotation_matrices": gg.rotation_matrices,
                 "scores": gg.scores,
             }
+
+            if visualize:
+                # list of open3d.geometry.TriangleMesh for visualization
+                grippers = gg.to_open3d_geometry_list()
+                res.update({
+                    "visualization": {
+                        "vertices": np.array([g.vertices for g in grippers]),
+                        "triangles": np.array([g.triangles for g in grippers]),
+                        "colors": np.array([g.vertex_colors for g in grippers]),
+                    }
+                })
 
             if double_encode:
                 return JSONResponse(json_numpy.dumps(res))
