@@ -40,6 +40,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--checkpoint_path', required=True, help='Model checkpoint path')
 parser.add_argument('--num_point', type=int, default=20000, help='Point Number [default: 20000]')
 parser.add_argument('--num_view', type=int, default=300, help='View Number [default: 300]')
+parser.add_argument('--port', type=int, default=8002, help='port of the server')
 parser.add_argument('--collision_thresh', type=float, default=0.01, help='Collision Threshold in collision detection [default: 0.01]')
 parser.add_argument('--voxel_size', type=float, default=0.01, help='Voxel Size to process point clouds before collision detection [default: 0.01]')
 cfgs = parser.parse_args()
@@ -106,9 +107,8 @@ def get_grasps(net, end_points):
     with torch.no_grad():
         end_points = net(end_points)
         grasp_preds = pred_decode(end_points)
-    gg_array = grasp_preds[0].detach().cpu().numpy()
-    gg = GraspGroup(gg_array)
-    return gg
+    gg_list = [GraspGroup(pred.detach().cpu().numpy()) for pred in grasp_preds]
+    return gg_list
 
 def collision_detection(gg, cloud):
     mfcdetector = ModelFreeCollisionDetector(cloud, voxel_size=cfgs.voxel_size)
@@ -128,6 +128,7 @@ class GraspInterface:
     def __init__(self, visualize_on_server: bool = False):
         self.net = get_net()
         self.visualize_on_server = visualize_on_server
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     @torch.no_grad()
     async def serve(self, payload: Dict[str, Any]) -> JSONResponse:
@@ -138,48 +139,49 @@ class GraspInterface:
                 payload = json.loads(payload["encoded"])
 
             points = payload.get("points", None)
-            colors = payload.get("colors", None)
-            visualize = payload.get("visualize", False)
             top_n = payload.get("top_n", 50)
-            if points is None or colors is None:
+            if points is None:
                 return JSONResponse({"status": "error"})
 
             end_points = dict()
-            cloud_sampled = torch.from_numpy(points[np.newaxis].astype(np.float32))
-            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            cloud_sampled = cloud_sampled.to(device)
+            if points.ndim == 2:
+                cloud_sampled = torch.from_numpy(points[np.newaxis].astype(np.float32))
+            else:
+                cloud_sampled = torch.from_numpy(points.astype(np.float32))
+            
+            cloud_sampled = cloud_sampled.to(self.device)
             end_points['point_clouds'] = cloud_sampled
-            end_points['cloud_colors'] = colors
+            end_points['cloud_colors'] = None
 
-            gg = get_grasps(self.net, end_points)
-            if cfgs.collision_thresh > 0:
-                gg = collision_detection(gg, deepcopy(points))
+            gg_list = get_grasps(self.net, end_points)
 
-            if self.visualize_on_server:
-                cloud = o3d.geometry.PointCloud()
-                cloud.points = o3d.utility.Vector3dVector(points.astype(np.float32))
-                cloud.colors = o3d.utility.Vector3dVector(colors.astype(np.float32))
-                vis_grasps(gg, cloud, top_n)
-
-            gg.nms()
-            gg.sort_by_score()
-            gg = gg[:top_n]
             res = {
-                "translations": gg.translations,
-                "rotation_matrices": gg.rotation_matrices,
-                "scores": gg.scores,
+                "translations": [],
+                "rotation_matrices": [],
+                "scores": [],
             }
+            for gg, pts in zip(gg_list, points):
+                if cfgs.collision_thresh > 0:
+                    gg = collision_detection(gg, deepcopy(pts))
 
-            if visualize:
-                # list of open3d.geometry.TriangleMesh for visualization
-                grippers = gg.to_open3d_geometry_list()
-                res.update({
-                    "visualization": {
-                        "vertices": np.array([g.vertices for g in grippers]),
-                        "triangles": np.array([g.triangles for g in grippers]),
-                        "colors": np.array([g.vertex_colors for g in grippers]),
-                    }
-                })
+                if self.visualize_on_server:
+                    cloud = o3d.geometry.PointCloud()
+                    cloud.points = o3d.utility.Vector3dVector(pts.astype(np.float32))
+                    vis_grasps(gg, cloud, top_n)
+
+                gg.nms()
+                gg.sort_by_score()
+                gg = gg[:top_n]
+
+                res['translations'].append(gg.translations)
+                res['rotation_matrices'].append(gg.rotation_matrices)
+                res['scores'].append(gg.scores)
+
+            res = {
+                "trans": np.stack(res['translations'], axis=0),
+                "R": np.stack(res['rotation_matrices'], axis=0),
+                "scores": np.stack(res['scores'], axis=0),
+            }
 
             if double_encode:
                 return JSONResponse(json_numpy.dumps(res))
@@ -193,7 +195,7 @@ class GraspInterface:
             return JSONResponse({"status": "error"})
 
 app = FastAPI()
-com = GraspInterface()
+com = GraspInterface(False)
 
 @app.post("/post")
 async def data_endpoint(payload: Dict[str, Any]):
@@ -205,7 +207,7 @@ if __name__ == "__main__":
 
     async def main():
         # Run both the FastAPI server and the main loop concurrently
-        server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=8001))
+        server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=cfgs.port))
         await asyncio.gather(
             server.serve(),
         )

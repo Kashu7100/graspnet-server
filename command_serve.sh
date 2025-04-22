@@ -9,4 +9,4 @@ if [ ! -f "checkpoint-rs.tar" ]; then
     gdown --id "$FILE_ID" -O "$OUTPUT_FILE"
 fi
 
-python serve.py --checkpoint_path checkpoint-rs.tar
+python serve.py --checkpoint_path checkpoint-rs.tar --port 8002

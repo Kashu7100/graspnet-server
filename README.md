@@ -41,17 +41,15 @@ You can get the grasp pose(s) by sending a point cloud:
 res = requests.post(
     f"http://0.0.0.0:8001/post",
     json={
-        "visualize": True, # visualize the grasp on the server side
-        "points": points,
-        "colors": colors
+        "points": points, # np array of [N,3] or [B,N,3]
     }
 ).json()
 
 # NOTE: res contains:
 # res = {
-#   "translations": gg.translations,            # target point as gripper center
-#   "rotation_matrices": gg.rotation_matrices,  # rotation matrix of gripper
-#   "scores": gg.scores,                        # grasp quality score
+#   "trans":  [C,3] or [B,C,3],      # target point as gripper center (the top C number of predictions)
+#   "R":      [C,3,3] or [B,C,3,3],  # rotation matrix of gripper
+#   "scores": [C] or [B,C],          # grasp quality score
 # }
 ```
 
